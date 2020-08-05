@@ -23,7 +23,8 @@ VERSION = '' 	 # So it uses the file inside the project directory
 # What packages are required for this module to be executed?
 REQUIRED = [
     # 'requests', 'maya', 'records',
-	"selenium"
+	"selenium",
+	"webdriver-manager"
 ]
 
 # What packages are optional?

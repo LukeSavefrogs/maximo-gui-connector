@@ -1,1 +1,1 @@
-from .maximo_gui_connector import *
+from maximo_gui_connector.main import *

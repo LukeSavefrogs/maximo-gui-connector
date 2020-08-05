@@ -1,8 +1,9 @@
 """
 	Contains all the logic behind Maximo Automation
 """
-import selenium
 import time
+
+import selenium
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
@@ -10,6 +11,12 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver import ActionChains
+
+from selenium.common.exceptions import StaleElementReferenceException
+
+
+from webdriver_manager.chrome import ChromeDriverManager
+
 import re
 import logging
 import time
@@ -17,6 +24,8 @@ import sys
 
 # Just for Debug
 import json
+
+import maximo_gui_connector.constants as constants
 
 # ----------------------------------------------------------------------------------------------------
 # 
@@ -50,15 +59,15 @@ class MaximoAutomation():
 		"""
 		self.logger = logging.getLogger(__name__)
 
-		self.logger_consoleHandler = logging.StreamHandler(sys.stdout)
-		self.logger_consoleHandler.setFormatter(logging.Formatter(fmt='[%(levelname)s] - %(message)s'))
+		# self.logger_consoleHandler = logging.StreamHandler(sys.stdout)
+		# self.logger_consoleHandler.setFormatter(logging.Formatter(fmt='[%(levelname)s] - %(message)s'))
 
-		self.logger_fileHandler = logging.FileHandler(filename='MaximoPyAutomation.log')
-		self.logger_fileHandler.setFormatter(logging.Formatter(fmt='[%(asctime)s] %(process)d - %(levelname)s - %(message)s', datefmt='%d-%m-%y %H:%M:%S'))
+		# self.logger_fileHandler = logging.FileHandler(filename='MaximoPyAutomation.log')
+		# self.logger_fileHandler.setFormatter(logging.Formatter(fmt='[%(asctime)s] %(process)d - %(levelname)s - %(message)s', datefmt='%d-%m-%y %H:%M:%S'))
 
-		# Add handlers to the logger
-		self.logger.addHandler(self.logger_consoleHandler)
-		self.logger.addHandler(self.logger_fileHandler)
+		# # Add handlers to the logger
+		# self.logger.addHandler(self.logger_consoleHandler)
+		# self.logger.addHandler(self.logger_fileHandler)
 
 
 		if "debug" in config:
@@ -70,7 +79,7 @@ class MaximoAutomation():
 
 				# self.logger_consoleHandler.setLevel(logging.DEBUG) # Needed only for finer and different control
 				self.logger.setLevel(logging.DEBUG)
-				self.logger_fileHandler.setFormatter(logging.Formatter(fmt='[%(asctime)s] %(process)d (%(filename)s:%(funcName)s:%(lineno)d) - %(levelname)s - %(message)s'))
+				# self.logger_fileHandler.setFormatter(logging.Formatter(fmt='[%(asctime)s] %(process)d (%(filename)s:%(lineno)d) - %(levelname)s - %(message)s'))
 
 				self.logger.debug("Debug mode enabled")
 			else:
@@ -97,7 +106,7 @@ class MaximoAutomation():
 		for flag in chrome_flags:
 			chrome_options.add_argument(flag)
 
-		self.driver = webdriver.Chrome( options=chrome_options )
+		self.driver = webdriver.Chrome( ChromeDriverManager().install(), options=chrome_options )
 		self.driver.get("https://ism.italycsc.com/UI/maximo/webclient/login/login.jsp?appservauth=true")
 
 		self.routeWorkflowDialog = RouteWorkflowInterface(self)
@@ -252,7 +261,7 @@ class MaximoAutomation():
 			try:
 				filter_id = self.driver.find_element_by_css_selector(input_selector).get_attribute("id")
 			except Exception:
-				self.logger.warning(f"Couldn't find filter input for column '{filter_label}' ({input_selector})")
+				self.logger.debug(f"Couldn't find filter input for column '{filter_label}' ({input_selector})")
 
 			filters_found[filter_label] = { "element_id": filter_id, "sorting": filter_sort, "column_number": filter_column_number }
 
@@ -287,8 +296,12 @@ class MaximoAutomation():
 
 
 			self.driver.find_element_by_css_selector("[id='" + filters_cache[filter_name.lower()]["element_id"] + "']").send_keys(filter_value)
+			self.driver.find_element_by_css_selector("[id='" + filters_cache[filter_name.lower()]["element_id"] + "']").send_keys(Keys.TAB)
 			self.logger.debug(f"Filter '{filter_name}' was set with value '{filter_value}'")
+			time.sleep(0.25)
 			
+		time.sleep(0.5)
+
 		self.logger.info(f"Filters successfully set")
 		self.driver.find_element_by_id("m6a7dfd2f-ti2_img").click()
 		self.waitUntilReady()
@@ -456,6 +469,17 @@ class MaximoAutomation():
 		self.driver.find_element_by_id("ROUTEWF__-tbb_anchor").click()
 		self.waitUntilReady()
 
+		if self.driver.find_elements_by_id("msgbox-dialog_inner"):
+			msg_box_text = self.driver.find_element_by_id("mb_msg").get_attribute("innerText").strip()
+
+			if "Change SCHEDULED DATE is not reach to start Activity" in msg_box_text:
+				btn_close = self.driver.find_element_by_id("m15f1c9f0-pb")
+				btn_close.click()
+
+				self.waitUntilReady()
+				raise MaximoWorkflowError(f"Error while trying to route Workflow. Message: {msg_box_text}")
+
+
 	def setNamedInput(self, targets: dict):
 		"""Sets the value of a named input in the current view
 		
@@ -463,44 +487,60 @@ class MaximoAutomation():
 		Args:
 			targets (dict): The EXACT label text you want to search
 		"""
-		for label in self.driver.find_elements_by_css_selector("label.text.label"):
-			if not label.get_attribute("innerText") or label.get_attribute("innerText").strip() == "": 
-				continue
+		MAX_RETRY_TIMES = 5
 
-			if len(label.get_attribute("class").split()) != 2: 
-				continue
+		retries = 1
+		while retries <= MAX_RETRY_TIMES:
+			retries += 1
 
-			if not label.get_attribute("for") or label.get_attribute("for").strip() == "": 
-				continue
+			try:
+				for label in self.driver.find_elements_by_css_selector("label.text.label"):
+					if not label.get_attribute("innerText") or label.get_attribute("innerText").strip() == "": 
+						continue
 
-			label_text = label.get_attribute("innerText").strip()
-			if label_text in targets:
-				input_id = label.get_attribute("for")
+					if len(label.get_attribute("class").split()) != 2: 
+						continue
 
-				if not self.driver.find_elements_by_id(input_id):
-					self.logger.error(f"No inputs are bound to the label named '{label_text}'")
-					
-					continue
+					if not label.get_attribute("for") or label.get_attribute("for").strip() == "": 
+						continue
+
+					label_text = label.get_attribute("innerText").strip()
+					if label_text in targets:
+						input_id = label.get_attribute("for")
+
+						if not self.driver.find_elements_by_id(input_id):
+							self.logger.error(f"No inputs are bound to the label named '{label_text}'")
+							
+							continue
+						
+						self.logger.debug(f"Now waiting for it to be editable")
+
+						self.waitForInputEditable(f"#{input_id}")
+
+						self.driver.find_element_by_id(input_id).clear()
+						self.driver.find_element_by_id(input_id).send_keys(targets[label_text])
+						self.driver.find_element_by_id(input_id).send_keys(Keys.TAB)
+
+						self.waitUntilReady()
+						time.sleep(0.5)
+						self.logger.info(f"Value '{targets[label_text]}' was set for named input '{label_text}'")
+
+						del targets[label_text]
 				
-				self.logger.debug(f"Now waiting for it to be editable")
-
-				self.waitForInputEditable(f"#{input_id}")
-
-				self.driver.find_element_by_id(input_id).clear()
-				self.driver.find_element_by_id(input_id).send_keys(targets[label_text])
-				self.driver.find_element_by_id(input_id).send_keys(Keys.TAB)
+					if not targets:
+						self.logger.debug("No more targets. Finished my job")
+						break
 
 				self.waitUntilReady()
-				time.sleep(0.5)
-				self.logger.info(f"Value '{targets[label_text]}' was set for named input '{label_text}'")
-
-				del targets[label_text]
-		
-			if not targets:
-				self.logger.debug("No more targets. Finished my job")
 				break
+			except StaleElementReferenceException as stale_ex:
+				self.logger.warning(f"Page changed while trying to access input element ({retries} attempt of {MAX_RETRY_TIMES} MAX)")
+				time.sleep(0.5)
+		else:
+			msg = f"Reached maximum retries number ({MAX_RETRY_TIMES}) while trying to set input value"
+			self.logger.error(msg)
 
-		self.waitUntilReady()
+			raise MaximoError(msg)
 
 
 	def getNamedInput(self, target: str):
@@ -526,6 +566,21 @@ class MaximoAutomation():
 				return self.driver.find_element_by_id(input_id)
 		else:
 			raise Exception("Element not found")
+
+	def handleIfComingFromDetail(self):
+		if self.driver.find_elements_by_id("msgbox-dialog_inner"):
+			msg_box_text = self.driver.find_element_by_id("mb_msg").get_attribute("innerText").strip()
+			self.logger.debug(f"MsgBox has appeared: {msg_box_text}")
+
+			if "Do you want to save your changes before continuing?" in msg_box_text: 
+				button_no = self.driver.find_element_by_id("m96ad0396-pb")
+				button_yes = self.driver.find_element_by_id("me1720906-pb")
+				button_cancel = self.driver.find_element_by_id("m77a4c18f-pb")
+
+				button_no.click()
+				self.logger.debug("Clicked on 'No'")
+
+				self.waitUntilReady()
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -577,6 +632,14 @@ class RouteWorkflowInterface():
 		return self
 
 	def clickRouteWorkflow(self):
+		"""Clicks on the 'Route Workflow' button, and checks if there are any errors
+
+		Raises:
+			MaximoWorkflowError: Exception occurred inside Maximo when trying to change the status
+
+		Returns:
+			[type]: [description]
+		"""
 		self.__maximo.driver.find_element_by_id("m24bf0ed1-pb").click()
 		self.__maximo.waitUntilReady()
 	
@@ -584,24 +647,30 @@ class RouteWorkflowInterface():
 			msg_box_text = self.__maximo.driver.find_element_by_id("mb_msg").get_attribute("innerText").strip()
 			self.__maximo.logger.error(f"MsgBox has appeared: {msg_box_text}")
 
+			button_ok = self.__maximo.driver.find_element_by_id("m88dbf6ce-pb")
+			additional_error_text = ""
+
 			if "Errors exist in the application that prevent this action from being performed" in msg_box_text:
-				# browser.find_elements_by_id("m88dbf6ce-pb").click()
-				self.__maximo.logger.error(f"Errors exist in the application. Your changes have not been saved\n")
-
-				raise MaximoWorkflowError("Errors exist in the application. Your changes have not been saved")
-
-			if "has been updated by another user. Your changes have not been saved" in msg_box_text:
-				# browser.find_elements_by_id("m88dbf6ce-pb").click()
-				self.__maximo.logger.error(f"Record have been changed by another user/instance. Your changes have not been saved\n")
+				additional_error_text = f"Errors exist in the application. Your changes have not been saved\n"
 				
-				raise MaximoWorkflowError("Errors exist in the application. Your changes have not been saved")
-
-			if "mp2# The transition of status from INPROG to CLOSE is not permitted." in msg_box_text:
-				# browser.find_elements_by_id("m88dbf6ce-pb").click()
-				self.__maximo.logger.error(f"Record have been changed by another user/instance. Your changes have not been saved\n")
+			elif "has been updated by another user. Your changes have not been saved" in msg_box_text:
+				additional_error_text = f"Record have been changed by another user/instance. Your changes have not been saved\n"
 				
-				raise MaximoWorkflowError("Errors exist in the application. Your changes have not been saved")
-		
+			elif "mp2# The transition of status from INPROG to CLOSE is not permitted." in msg_box_text:
+				additional_error_text = f"Record have been changed by another user/instance. Your changes have not been saved\n"
+			else:
+				additional_error_text = ""
+				self.__maximo.logger.warning("Error not handled by the script")
+
+			if additional_error_text: self.__maximo.logger.error(additional_error_text)
+			button_ok.click()
+			self.__maximo.waitUntilReady()
+
+			self.closeDialog()
+
+
+			raise MaximoWorkflowError("Errors exist in the application. Your changes have not been saved")
+
 		return self
 
 
