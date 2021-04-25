@@ -3,10 +3,14 @@
 
 # Note: To use the 'upload' functionality of this file, you must:
 #   $ pipenv install twine --dev
+#
+# Then:
+# 	$ python setup.py upload
 
 import io
 import os
 import sys
+import re
 from shutil import rmtree
 
 from setuptools import find_packages, setup, Command
@@ -19,6 +23,8 @@ EMAIL = 'lucasalvarani99@gmail.com'
 AUTHOR = 'Luca Salvarani'
 REQUIRES_PYTHON = '>=3.0'
 VERSION = '' 	 # So it uses the file inside the project directory
+
+IMAGES_PATH = "https://raw.githubusercontent.com/LukeSavefrogs/maximo-gui-connector/master/images"
 
 # What packages are required for this module to be executed?
 REQUIRED = [
@@ -42,8 +48,11 @@ here = os.path.abspath(os.path.dirname(__file__))
 # Import the README and use it as the long-description.
 # Note: this will only work if 'README.md' is present in your MANIFEST.in file!
 try:
-    with io.open(os.path.join(here, 'README.md'), encoding='utf-8') as f:
-        long_description = '\n' + f.read()
+	with io.open(os.path.join(here, 'README.md'), encoding='utf-8') as f:
+		long_description = '\n' + f.read()
+
+	long_description = long_description.replace("(./images", f"({IMAGES_PATH}")
+	long_description = re.sub("(?<=src=('|\"))images", F"{IMAGES_PATH}", long_description)
 except FileNotFoundError:
     long_description = DESCRIPTION
 

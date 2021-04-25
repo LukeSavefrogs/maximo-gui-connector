@@ -2,6 +2,9 @@
 	Contains all the logic behind Maximo Automation
 """
 import time
+import re
+import logging
+import sys
 
 import selenium
 from selenium import webdriver
@@ -12,20 +15,18 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver import ActionChains
 
-from selenium.common.exceptions import StaleElementReferenceException
-
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 
 from webdriver_manager.chrome import ChromeDriverManager
-
-import re
-import logging
-import time
-import sys
 
 # Just for Debug
 import json
 
 import maximo_gui_connector.constants as constants
+
+# cSpell:includeRegExp #.*
+# cSpell:includeRegExp ("""|''')[^\1]*\1
+
 
 # ----------------------------------------------------------------------------------------------------
 # 
@@ -42,7 +43,15 @@ class MaximoAutomation():
 
 	sections_cache = {}
 	
-	def __init__(self, config = {}):
+	def __init__(self, config = {}, driverInstance = None):
+		"""Establish a connection to Maximo
+
+		Args:
+			config (dict, optional): [description]. Defaults to {}.
+			driverInstance (dict, optional): If you have already defined a Webdriver instance, you can pass that using this argument.
+		"""		
+
+
 		chrome_flags = []
 
 		"""
@@ -59,55 +68,50 @@ class MaximoAutomation():
 		"""
 		self.logger = logging.getLogger(__name__)
 
-		# self.logger_consoleHandler = logging.StreamHandler(sys.stdout)
-		# self.logger_consoleHandler.setFormatter(logging.Formatter(fmt='[%(levelname)s] - %(message)s'))
-
-		# self.logger_fileHandler = logging.FileHandler(filename='MaximoPyAutomation.log')
-		# self.logger_fileHandler.setFormatter(logging.Formatter(fmt='[%(asctime)s] %(process)d - %(levelname)s - %(message)s', datefmt='%d-%m-%y %H:%M:%S'))
-
-		# # Add handlers to the logger
-		# self.logger.addHandler(self.logger_consoleHandler)
-		# self.logger.addHandler(self.logger_fileHandler)
-
-
 		if "debug" in config:
 			self.debug = bool(config["debug"])
 
 			# https://peter.sh/experiments/chromium-command-line-switches/#log-level
 			if self.debug: 
 				chrome_flags.append("--log-level=1") # Prints starting from DEBUG messages
-
-				# self.logger_consoleHandler.setLevel(logging.DEBUG) # Needed only for finer and different control
 				self.logger.setLevel(logging.DEBUG)
-				# self.logger_fileHandler.setFormatter(logging.Formatter(fmt='[%(asctime)s] %(process)d (%(filename)s:%(lineno)d) - %(levelname)s - %(message)s'))
 
 				self.logger.debug("Debug mode enabled")
 			else:
 				chrome_flags.append("--log-level=3") # Prints starting from CRITICAL messages
-
-				# self.logger_consoleHandler.setLevel(logging.INFO)
 				self.logger.setLevel(logging.INFO)
 
 		if "headless" in config:
 			self.headless = bool(config["headless"])
 			if self.headless: chrome_flags.append("--headless")
 
-		chrome_flags = chrome_flags + [
-			# "--disable-extensions",
-			"start-maximized",
-			"--disable-gpu",
-			"--ignore-certificate-errors",
-			"--ignore-ssl-errors",
-			#"--no-sandbox # linux only,
-			# "--headless",
-		]
-		chrome_options = Options()
-			
-		for flag in chrome_flags:
-			chrome_options.add_argument(flag)
+		if not "driver" in config:
+			self.logger.debug("Using default WebDriver instance")
+			chrome_flags = chrome_flags + [
+				# "--disable-extensions",
+				"start-maximized",
+				"--disable-gpu",
+				"--ignore-certificate-errors",
+				"--ignore-ssl-errors",
+				#"--no-sandbox # linux only,
+				# "--headless",
+			]
+			chrome_options = Options()
+				
+			for flag in chrome_flags: chrome_options.add_argument(flag)
 
-		self.driver = webdriver.Chrome( ChromeDriverManager().install(), options=chrome_options )
-		self.driver.get("https://ism.italycsc.com/UI/maximo/webclient/login/login.jsp?appservauth=true")
+			if not self.debug:
+				# To remove "DevTools listening on ws:..." message (https://stackoverflow.com/a/56118790/8965861)
+				chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
+
+			self.driver = webdriver.Chrome( ChromeDriverManager().install(), options=chrome_options )
+
+		else:
+			self.logger.debug("Using custom WebDriver instance")
+
+			self.driver = config["driver"]
+			
+		self.driver.get("https://ism.italycsc.com/UI/maximo/webclient/login/login.jsp")
 
 		self.routeWorkflowDialog = RouteWorkflowInterface(self)
 
@@ -117,6 +121,7 @@ class MaximoAutomation():
 	
 	def login (self, username, password):
 		"""Logs the user into Maximo, using the provided credentials"""
+		self.logger.info("Trying to log in...")
 		WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "j_username")))
 
 		self.driver.find_element_by_id("j_username").send_keys(username)
@@ -128,7 +133,26 @@ class MaximoAutomation():
 		if self.debug: self.logger.debug("Clicked on Submit button")
 		
 		# Wait until Maximo has finished logging in
-		WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "titlebar_hyperlink_9-lbsignout")))
+		try:
+			WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "titlebar_hyperlink_9-lbsignout")))
+		except TimeoutException as e:
+			login_dialog_title = self.driver.find_element_by_css_selector("div.dialog[role='main'] > .message")
+
+			if login_dialog_title:
+				text_login_dialog_msg = self.driver.find_element_by_css_selector("div.dialog[role='main'] > .messageDesc").get_attribute("innerText")
+				text_login_dialog_title = self.driver.find_element_by_css_selector("div.dialog[role='main'] > .message").get_attribute("innerText")
+
+				self.logger.critical(f"{text_login_dialog_title}: {text_login_dialog_msg}")
+				raise MaximoLoginFailed(f"{text_login_dialog_title}: {text_login_dialog_msg}")
+
+			else:
+				self.logger.critical("Timeout not handled occurred during login phase: " + str(e))
+				raise MaximoLoginFailed("Timeout not handled occurred during login phase: " + str(e))
+				
+		except Exception as e:
+			self.logger.critical("Unknown error occurred during login phase: " + str(e))
+			raise MaximoLoginFailed("Unknown error occurred during login phase: " + str(e))
+
 		self.waitUntilReady()
 
 		self.logger.info("User successfully logged in")
@@ -136,11 +160,6 @@ class MaximoAutomation():
 
 	def logout (self):
 		""" Performs the logout """
-		""" 
-			WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "titlebar_hyperlink_9-lbsignout")))
-			self.driver.find_element_by_id("titlebar_hyperlink_9-lbsignout").click()
-			if self.debug: print("Clicked on the logout button") 
-		"""
 		# Maximo has a special constant (LOGOUTURL) containing the direct url that can be used to logout
 		self.driver.execute_script("window.location = LOGOUTURL")
 		
@@ -150,6 +169,7 @@ class MaximoAutomation():
 		# Click on the Submit button 
 		self.driver.find_element_by_id("submit").click()
 
+		# Wait until the Login page is shown
 		WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "j_username")))
 		self.logger.info("User successfully logged out\n\n")
 
@@ -211,7 +231,7 @@ class MaximoAutomation():
 		section_name_parsed = section_name.lower().replace("(MP)", "")
 		if section_name_parsed in self.sections_cache:
 			self.driver.execute_script(self.sections_cache[section_name_parsed]["href"])
-			self.logger.info(f"Clicked on section '{self.sections_cache[section_name_parsed]['name']}'")
+			if self.debug: self.logger.debug(f"Clicked on section '{self.sections_cache[section_name_parsed]['name']}'")
 
 		else:
 			raise Exception(f"Section '{section_name}' does not exist. The following were found:\n" + json.dumps(self.sections_cache, sort_keys=True, indent=4))
@@ -261,7 +281,7 @@ class MaximoAutomation():
 			try:
 				filter_id = self.driver.find_element_by_css_selector(input_selector).get_attribute("id")
 			except Exception:
-				self.logger.debug(f"Couldn't find filter input for column '{filter_label}' ({input_selector})")
+				if self.debug: self.logger.debug(f"Couldn't find filter input for column '{filter_label}' ({input_selector})")
 
 			filters_found[filter_label] = { "element_id": filter_id, "sorting": filter_sort, "column_number": filter_column_number }
 
@@ -297,7 +317,7 @@ class MaximoAutomation():
 
 			self.driver.find_element_by_css_selector("[id='" + filters_cache[filter_name.lower()]["element_id"] + "']").send_keys(filter_value)
 			self.driver.find_element_by_css_selector("[id='" + filters_cache[filter_name.lower()]["element_id"] + "']").send_keys(Keys.TAB)
-			self.logger.debug(f"Filter '{filter_name}' was set with value '{filter_value}'")
+			if self.debug: self.logger.debug(f"Filter '{filter_name}' was set with value '{filter_value}'")
 			time.sleep(0.25)
 			
 		time.sleep(0.5)
@@ -306,12 +326,21 @@ class MaximoAutomation():
 		self.driver.find_element_by_id("m6a7dfd2f-ti2_img").click()
 		self.waitUntilReady()
 
+		# Search
 		if self.driver.find_elements_by_id("m4b77cc6f-pb"):
 			WebDriverWait(self.driver, 30).until(EC.invisibility_of_element_located((By.ID, "m4b77cc6f-pb")))
 			self.waitUntilReady()
 
 
-	def quickSearch(self, resource_id):
+	def quickSearch(self, resource_id: str):
+		"""Performs a Quick Search using the field at the top left corner of the view
+
+		Args:
+			resource_id (str): The ID of the resource to search (ex. INxxxxxx or CHxxxxxxx)
+
+		Returns:
+			bool: True if at least one record was found
+		"""
 		self.waitUntilReady()
 		self.waitForInputEditable("#quicksearch")
 		self.driver.find_element_by_id("quicksearch").clear()
@@ -319,13 +348,44 @@ class MaximoAutomation():
 		
 		self.driver.find_element_by_id("quicksearchQSImage").click()
 
-		if self.debug: self.logger.debug(f"Searching for id: {resource_id}")
+		self.logger.info(f"Searching for id: {resource_id}")
 		
 		self.waitUntilReady()
 		if self.driver.find_elements_by_id("m88dbf6ce-pb") and "No records were found that match the specified query" in self.driver.find_element_by_id("mb_msg").get_attribute("innerText"):
 			self.logger.error(f"Cannot find requested id: '{resource_id}'")
+			return False
 		
 		WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "m397b0593-tabs_middle")))
+
+	def advancedSearch(self, params: dict, submitForm: bool = True):
+		"""Performs an Advanced Search
+
+		Args:
+			params (dict): The data to send
+			submitForm (bool): The data to send
+
+		"""
+		self.waitUntilReady()
+
+		self.logger.debug(f"Performing advanced search with params: '{params}'")
+
+		self.driver.find_element_by_id("quicksearchQSMenuImage").click()
+		self.waitUntilReady()
+
+		self.driver.find_element_by_id("menu0_SEARCHMORE_OPTION_a_tnode").click()
+		self.waitUntilReady()
+
+		# Wait for it to load
+		WebDriverWait(self.driver, 10).until(EC.visibility_of_element_located((By.ID, "maa8a5ebf-pb")))
+
+		for key, value in params.items():
+			self.setNamedInput({ key: value })
+
+		if submitForm:
+			# Find with the provided filters
+			self.driver.find_element_by_id("maa8a5ebf-pb").click()
+			self.waitUntilReady()
+
 
 	def getBrowserInstance(self):
 		"""
@@ -338,17 +398,90 @@ class MaximoAutomation():
 		Given an id of a table row/field, returns the column number 
 
 		Args:
-			row_id ([type]): [description]
+			row_id (str): The column HTML element ID
 
 		Returns:
-			[type]: [description]
+			int: The column number
 		"""
 		regex_result = re.search("\[C:([0-9]+)\]", row_id)
 		if regex_result: 
 			return regex_result.groups(1)[0].strip()
 		else:
 			return None
-		pass
+		
+
+	def getTableRows (self): 
+		return self.driver.execute_script("""
+			return document.querySelectorAll("#m6a7dfd2f_tbod-tbd tr.tablerow[id^='m6a7dfd2f_tbod_tdrow-tr']")
+		""")
+
+
+
+	# Table Methods
+	def getTableHeaders (self): 
+		return self.driver.execute_script("""
+			let columns = document.querySelectorAll("#m6a7dfd2f_tbod_ttrow-tr th");
+			let headers = Array.from(columns).reduce((accum, curr) => {
+				let text = curr.innerText.trim();
+				if (text) accum.push({ id: curr.cellIndex, text: text });
+		
+				return accum;
+			}, [])
+		
+			return headers;
+		""")
+
+	def getTableRowsAll (self):
+		return self.driver.execute_script("""
+			function getTableHeaders () {
+				let columns = document.querySelectorAll("#m6a7dfd2f_tbod_ttrow-tr th");
+				let headers = Array.from(columns).reduce((accum, curr) => {
+					let text = curr.innerText.trim();
+					if (text) accum.push({ id: curr.cellIndex, text: text });
+			
+					return accum;
+				}, [])
+			
+				return headers;
+			}
+
+			function getTableRowsDetails () {
+				let data = [];
+				
+				// Prendo gli header
+				let headers = getTableHeaders();
+				console.log("Headers: %o", headers)
+
+				// Prendo i dati per ogni riga
+				document.querySelectorAll("#m6a7dfd2f_tbod-tbd tr.tablerow[id^='m6a7dfd2f_tbod_tdrow-tr[']").forEach(r => {
+					columns = Array.from(r.querySelectorAll("td")).map(c => {
+						return {
+							"id": c.cellIndex,
+							"text": c.innerText.trim()
+						}
+					}).filter(column => { 
+						// Prendo solo i dati che hanno un rispettivo header
+						return headers.some(header => column.id === header.id)
+					}).reduce((final, column) => {
+						// Associo ad ogni colonna il rispettivo nome
+						let header_text = headers.find(h => column.id === h.id).text;
+						final[header_text] = column.text
+						
+						return final;
+					}, {});
+
+					data.push({
+						"data": columns,
+						"element_id": r.id
+					});
+				});
+				
+				return data;
+			}
+			
+			
+			return getTableRowsDetails ();
+		""")
 
 	def getRecordDetailsFromTable (self, record: selenium.webdriver.remote.webelement.WebElement, filters, required_fields: list = []):
 		"""When inside a Section with a Table list (ex. when inside the list of Changes open owned by my groups)
@@ -392,37 +525,27 @@ class MaximoAutomation():
 		Returns:
 			list: List of Dictionaries of all the table rows 
 		"""
+		start = time.time()
+
 		record_list = []
 
 		while True:
 			counter = self.driver.find_element_by_id("m6a7dfd2f-lb3").get_attribute("innerText").strip()
 
-			table_rows = self.driver.find_elements_by_css_selector("#m6a7dfd2f_tbod-tbd tr.tablerow[id*='tbod_tdrow-tr[R:']")
+			self.logger.info(f"[Paging] Analyzing records for page: {counter}")
 
-			if self.debug: self.logger.info(f"[Paging] Analyzing records for page: {counter}")
+			table_rows = self.getTableRowsAll()
+			record_list.extend(table_rows)
 
-			filters = self.getAvailableFiltersInListView()
-
-			
-			for index, row in enumerate(table_rows): 
-				record_list.append(
-					{
-						"data": self.getRecordDetailsFromTable(row, filters),
-						"element_id": row.get_attribute("id")
-					}
-				)
-				if self.debug: self.logger.debug("\tRow n." + str(index + 1))
-			
-
+			# If more pages are found, continue with the next cycle
 			next_page_available = self.driver.find_element_by_id("m6a7dfd2f-ti7_img").get_attribute("source") == "tablebtn_next_on.gif"
-
 			if not next_page_available: break
 
-			if self.debug: self.logger.debug("[Paging] Changing page")
+			if self.debug: self.logger.debug("[Paging] Changing page...")
+
+			# Click on the Arrow icon to change page
 			self.driver.find_element_by_id("m6a7dfd2f-ti7_img").click()
 			self.waitUntilReady()
-			
-
 
 		return record_list
 
@@ -436,6 +559,11 @@ class MaximoAutomation():
 			str: The row number
 		"""
 		return str(self.driver.execute_script("return getRowFromId(arguments[0])", row_id))
+
+
+
+
+
 
 	def waitForInputEditable(self, element_selector: str, timeout: int = 30):
 		"""
@@ -460,24 +588,111 @@ class MaximoAutomation():
 		
 		# Waits for the input not to be in readonly mode
 		WebDriverWait(self.driver, timeout).until(
-			lambda s:"fld_ro" not in s.find_element_by_css_selector(element_selector).get_attribute('class').split()
+			lambda s: self.isInputEditable(element_selector)
 		)
 
 		return self.driver.find_element_by_css_selector(element_selector)
+
+
+	def isInputEditable(self, element_selector: str):
+		"""
+		Checks whether an input/textarea is editable at the moment
+
+		Args:
+			element_selector (str): The CSS element selector
+		"""
+		# Waits until Maximo is ready (input wouldn't be ready anyway)
+		#
+		self.waitUntilReady()
+
+		return "fld_ro" not in self.driver.find_element_by_css_selector(element_selector).get_attribute('class').split()
 
 	def clickRouteWorkflow(self):
 		self.driver.find_element_by_id("ROUTEWF__-tbb_anchor").click()
 		self.waitUntilReady()
 
-		if self.driver.find_elements_by_id("msgbox-dialog_inner"):
-			msg_box_text = self.driver.find_element_by_id("mb_msg").get_attribute("innerText").strip()
+		foregroundDialog = self.getForegroundDialog()
 
-			if "Change SCHEDULED DATE is not reach to start Activity" in msg_box_text:
-				btn_close = self.driver.find_element_by_id("m15f1c9f0-pb")
-				btn_close.click()
-
+		# TODO: Da portare all'interno dei singoli script per una migliore astrazione
+		if foregroundDialog:
+			if "Complete Workflow Assignment" in foregroundDialog["title"]:
+				foregroundDialog["buttons"]["OK"].click()
 				self.waitUntilReady()
-				raise MaximoWorkflowError(f"Error while trying to route Workflow. Message: {msg_box_text}")
+
+			if self.driver.find_elements_by_id("msgbox-dialog_inner"):
+				msg_box_text = self.driver.find_element_by_id("mb_msg").get_attribute("innerText").strip()
+
+				if "Change SCHEDULED DATE is not reach to start Activity" in msg_box_text:
+					btn_close = self.driver.find_element_by_id("m15f1c9f0-pb")
+					btn_close.click()
+
+					self.waitUntilReady()
+					raise MaximoWorkflowError(f"Error while trying to route Workflow. Message: {msg_box_text}")
+
+
+
+	def detectDialogs(self):
+		"""
+		Checks if there is any dialog on foreground
+		
+		Returns:
+			List of Dictionaries
+		"""
+		dialogs = self.driver.execute_script(r"""
+				function detectMaximoDialogs() {
+					let data = [];
+
+					document.querySelectorAll("[id$='-dialog_inner'").forEach(e => {
+						// Solo il dialog in primo piano ha la classe 'wait_modal'. Lo prendo e controllo
+						let wait_elem = document.getElementById(`${e.id}_dialogwait`);
+						let is_in_front = wait_elem.classList.contains("wait_modal");
+
+						let type = e.getAttribute("role")
+						
+						let dialog_head = e.querySelector("[id$='-dialog_content0']");
+						let dialog_body = e.querySelector("[id$='-dialog_content1']");
+
+						let title 	= dialog_head.innerText.trim();
+						let body 	= dialog_body.querySelector("[id*='_bodydiv']");
+
+						let buttons = Array.from(dialog_body.querySelectorAll("button.pb[type='button'][ctype='pushbutton']")).reduce((accum, curr_button) => {
+							accum[curr_button.innerText.trim()] = curr_button;
+
+							return accum;
+						}, {})
+
+						data.push({
+							is_foreground: is_in_front,
+							title: title,
+							text: body.innerText.trim().replace(/\r?\n/, " ").trim(),
+							type: type,
+							buttons: buttons,
+							html: {
+								head: dialog_head,
+								body: body,
+								full_element: e
+							}
+						})
+					});
+
+					return data;
+				};
+
+				return detectMaximoDialogs();
+			""")
+
+		if dialogs:
+			if self.debug: self.logger.debug(f"Found {len(dialogs)} dialog/s!")
+
+		return dialogs
+
+	def getForegroundDialog(self):
+		"""Returns the foreground dialog
+
+		Returns:
+			Dict: Dictionary containing details of the foreground dialog
+		"""
+		return next((item for item in self.detectDialogs() if item["is_foreground"] == True), None)
 
 
 	def setNamedInput(self, targets: dict):
@@ -523,18 +738,18 @@ class MaximoAutomation():
 
 						self.waitUntilReady()
 						time.sleep(0.5)
-						self.logger.info(f"Value '{targets[label_text]}' was set for named input '{label_text}'")
+						if self.debug: self.logger.debug(f"Value '{targets[label_text]}' was set for named input '{label_text}'")
 
 						del targets[label_text]
 				
 					if not targets:
-						self.logger.debug("No more targets. Finished my job")
+						if self.debug: self.logger.debug("No more targets. Finished my job")
 						break
 
 				self.waitUntilReady()
 				break
-			except StaleElementReferenceException as stale_ex:
-				self.logger.warning(f"Page changed while trying to access input element ({retries} attempt of {MAX_RETRY_TIMES} MAX)")
+			except StaleElementReferenceException:
+				if self.debug: self.logger.debug(f"Page changed while trying to access input element ({retries} attempt of {MAX_RETRY_TIMES} MAX)")
 				time.sleep(0.5)
 		else:
 			msg = f"Reached maximum retries number ({MAX_RETRY_TIMES}) while trying to set input value"
@@ -566,21 +781,45 @@ class MaximoAutomation():
 				return self.driver.find_element_by_id(input_id)
 		else:
 			raise Exception("Element not found")
+		
+	def getNamedLabel(self, target: str):
+		"""Gets the element of a named input in the current view
 
-	def handleIfComingFromDetail(self):
-		if self.driver.find_elements_by_id("msgbox-dialog_inner"):
-			msg_box_text = self.driver.find_element_by_id("mb_msg").get_attribute("innerText").strip()
-			self.logger.debug(f"MsgBox has appeared: {msg_box_text}")
+		Args:
+			target (str): The EXACT label text you want to search
+		"""
+		for label in self.driver.find_elements_by_css_selector(".anchor.text.label"):
+			""" if len(label.get_attribute("class").split()) != 2 or not label.get_attribute("for").strip(): 
+				continue """
+			
+			label_text = label.get_attribute("innerText").strip()
+			if label_text == target.strip():				
+				return label
+		else:
+			raise Exception("Element not found")
 
-			if "Do you want to save your changes before continuing?" in msg_box_text: 
-				button_no = self.driver.find_element_by_id("m96ad0396-pb")
-				button_yes = self.driver.find_element_by_id("me1720906-pb")
-				button_cancel = self.driver.find_element_by_id("m77a4c18f-pb")
+	def handleIfComingFromDetail(self):		
+		foregroundDialog = self.getForegroundDialog()
 
-				button_no.click()
-				self.logger.debug("Clicked on 'No'")
+		if foregroundDialog and "Do you want to save your changes before continuing?" in foregroundDialog["text"]:
+			if self.debug: self.logger.debug(f"MsgBox has appeared: {foregroundDialog['text']}")
 
-				self.waitUntilReady()
+			foregroundDialog["buttons"]["No"].click()
+			if self.debug: self.logger.debug("Clicked on 'No'")
+
+			self.waitUntilReady()
+
+
+	def checkUpdateError(self):
+		foregroundDialog = self.getForegroundDialog()
+
+		if foregroundDialog and "has been updated by another user. Your changes have not been saved. Refresh the record and try again" in foregroundDialog["text"]:
+			foregroundDialog["buttons"]["OK"].click()
+			self.waitUntilReady()
+
+			return True
+
+		return False
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -660,9 +899,10 @@ class RouteWorkflowInterface():
 				additional_error_text = f"Record have been changed by another user/instance. Your changes have not been saved\n"
 			else:
 				additional_error_text = ""
-				self.__maximo.logger.warning("Error not handled by the script")
+				self.__maximo.logger.warning("Error not handled by this script")
 
 			if additional_error_text: self.__maximo.logger.error(additional_error_text)
+
 			button_ok.click()
 			self.__maximo.waitUntilReady()
 
@@ -672,6 +912,7 @@ class RouteWorkflowInterface():
 			raise MaximoWorkflowError("Errors exist in the application. Your changes have not been saved")
 
 		return self
+
 
 
 
@@ -689,6 +930,13 @@ class MaximoError(Exception):
 
 class MaximoWorkflowError(MaximoError):
 	"""Exception raised when something in Maximo Workflow fails"""
+
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args)
+		self.foo = kwargs.get('foo')
+
+class MaximoLoginFailed(MaximoError):
+	"""Exception raised when something in Maximo Login fails"""
 
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args)
