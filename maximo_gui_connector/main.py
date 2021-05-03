@@ -43,12 +43,14 @@ class MaximoAutomation():
 
 	sections_cache = {}
 	
-	def __init__(self, config = {}, driverInstance = None):
+	def __init__(self, config = {}):
 		"""Establish a connection to Maximo
 
 		Args:
 			config (dict, optional): [description]. Defaults to {}.
-			driverInstance (dict, optional): If you have already defined a Webdriver instance, you can pass that using this argument.
+			config.debug (bool, optional): Add verbosity and tweak config Webdriver to log more info
+			config.headless (bool, optional): Whether to start
+			config.driver (Webdriver, optional): If you have already defined a Webdriver instance, you can pass that using this argument.
 		"""		
 
 
@@ -67,6 +69,7 @@ class MaximoAutomation():
 		https://blog.muya.co.ke/configuring-multiple-loggers-python/
 		"""
 		self.logger = logging.getLogger(__name__)
+		self.logger.addHandler(logging.NullHandler())
 
 		if "debug" in config:
 			self.debug = bool(config["debug"])
@@ -326,7 +329,7 @@ class MaximoAutomation():
 		self.driver.find_element_by_id("m6a7dfd2f-ti2_img").click()
 		self.waitUntilReady()
 
-		# Search
+		# Sometimes for long searches a dialog is shown
 		if self.driver.find_elements_by_id("m4b77cc6f-pb"):
 			WebDriverWait(self.driver, 30).until(EC.invisibility_of_element_located((By.ID, "m4b77cc6f-pb")))
 			self.waitUntilReady()
@@ -369,10 +372,13 @@ class MaximoAutomation():
 
 		self.logger.debug(f"Performing advanced search with params: '{params}'")
 
+		WebDriverWait(self.driver, 10).until(EC.visibility_of_element_located((By.ID, "quicksearchQSMenuImage")))
 		self.driver.find_element_by_id("quicksearchQSMenuImage").click()
 		self.waitUntilReady()
 
-		self.driver.find_element_by_id("menu0_SEARCHMORE_OPTION_a_tnode").click()
+		# Popup content is generated dynamically. Wait for it to open
+		WebDriverWait(self.driver, 10).until(EC.visibility_of_element_located((By.ID, "menu0_SEARCHMORE_OPTION_a")))
+		self.driver.find_element_by_id("menu0_SEARCHMORE_OPTION_a").click()
 		self.waitUntilReady()
 
 		# Wait for it to load
