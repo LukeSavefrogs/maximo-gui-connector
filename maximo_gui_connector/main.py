@@ -43,7 +43,7 @@ class MaximoAutomation():
 
 	sections_cache = {}
 	
-	def __init__(self, config = {}):
+	def __init__(self, config: dict = {}):
 		"""Establish a connection to Maximo
 
 		Args:
@@ -70,23 +70,18 @@ class MaximoAutomation():
 		"""
 		self.logger = logging.getLogger(__name__)
 		self.logger.addHandler(logging.NullHandler())
+		
+		self.debug = bool(config["debug"]) if "debug" in config else False
 
-		if "debug" in config:
-			self.debug = bool(config["debug"])
+		# https://peter.sh/experiments/chromium-command-line-switches/#log-level
+		if self.debug: 
+			chrome_flags.append("--log-level=1") # Prints starting from DEBUG messages
+			self.logger.setLevel(logging.DEBUG)
 
-			# https://peter.sh/experiments/chromium-command-line-switches/#log-level
-			if self.debug: 
-				chrome_flags.append("--log-level=1") # Prints starting from DEBUG messages
-				self.logger.setLevel(logging.DEBUG)
-
-				self.logger.debug("Debug mode enabled")
-			else:
-				chrome_flags.append("--log-level=3") # Prints starting from CRITICAL messages
-				self.logger.setLevel(logging.INFO)
-
-		if "headless" in config:
-			self.headless = bool(config["headless"])
-			if self.headless: chrome_flags.append("--headless")
+			self.logger.debug("Debug mode enabled")
+		else:
+			chrome_flags.append("--log-level=3") # Prints starting from CRITICAL messages
+			self.logger.setLevel(logging.INFO)
 
 		if not "driver" in config:
 			self.logger.debug("Using default WebDriver instance")
@@ -99,14 +94,23 @@ class MaximoAutomation():
 				#"--no-sandbox # linux only,
 				# "--headless",
 			]
+
+			# If passed configuration contains headless
+			self.headless = bool(config["headless"]) if "headless" in config else False
+			
+			# If the browser needs to be started as a headless browser
+			if self.headless: 
+				chrome_flags.append("--headless")
+
+			# Create the Chrome Options
 			chrome_options = Options()
-				
 			for flag in chrome_flags: chrome_options.add_argument(flag)
 
+			# To remove "DevTools listening on ws:..." message (https://stackoverflow.com/a/56118790/8965861)
 			if not self.debug:
-				# To remove "DevTools listening on ws:..." message (https://stackoverflow.com/a/56118790/8965861)
 				chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
+			# Create the actual WebDriver instance
 			self.driver = webdriver.Chrome( ChromeDriverManager().install(), options=chrome_options )
 
 		else:
@@ -116,31 +120,37 @@ class MaximoAutomation():
 			
 		self.driver.get("https://ism.italycsc.com/UI/maximo/webclient/login/login.jsp")
 
+
+		# Sub-class
 		self.routeWorkflowDialog = RouteWorkflowInterface(self)
 
 		
 
 
 	
-	def login (self, username, password):
+	def login (self, username: str, password: str):
 		"""Logs the user into Maximo, using the provided credentials"""
 		self.logger.info("Trying to log in...")
 		WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "j_username")))
 
+		# Send data to the Login form
 		self.driver.find_element_by_id("j_username").send_keys(username)
 		self.driver.find_element_by_id("j_password").send_keys(password)
 
 		if self.debug: self.logger.debug(f"Username/Password were sent to the login Form (using {username})")
 
+		# Click the 'Login' button
 		self.driver.find_element_by_css_selector("button#loginbutton").click()
 		if self.debug: self.logger.debug("Clicked on Submit button")
 		
 		# Wait until Maximo has finished logging in
 		try:
+			if self.debug: self.logger.debug("Waiting until Maximo has finished logging in...")
 			WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "titlebar_hyperlink_9-lbsignout")))
 		except TimeoutException as e:
 			login_dialog_title = self.driver.find_element_by_css_selector("div.dialog[role='main'] > .message")
 
+			# If there is an error message raise a `MaximoLoginFailed` Exception
 			if login_dialog_title:
 				text_login_dialog_msg = self.driver.find_element_by_css_selector("div.dialog[role='main'] > .messageDesc").get_attribute("innerText")
 				text_login_dialog_title = self.driver.find_element_by_css_selector("div.dialog[role='main'] > .message").get_attribute("innerText")
@@ -149,8 +159,8 @@ class MaximoAutomation():
 				raise MaximoLoginFailed(f"{text_login_dialog_title}: {text_login_dialog_msg}")
 
 			else:
-				self.logger.critical("Timeout not handled occurred during login phase: " + str(e))
-				raise MaximoLoginFailed("Timeout not handled occurred during login phase: " + str(e))
+				self.logger.exception(f"Timeout not handled occurred during login phase: {str(e)}")
+				raise MaximoLoginFailed(f"Timeout not handled occurred during login phase: {str(e)}")
 				
 		except Exception as e:
 			self.logger.critical("Unknown error occurred during login phase: " + str(e))
@@ -183,8 +193,10 @@ class MaximoAutomation():
 
 
 	def isReady(self):
-		""" Returns whether or not Maximo is ready to be automated """
-		js_result = self.driver.execute_script("return waitOn == false && !document.getElementById('m935819a1-longop_message');")
+		""" Returns whether or not Maximo is ready to be automated. """
+		js_result = self.driver.execute_script("""
+			return waitOn == false && !document.getElementById('m935819a1-longop_message');
+		""")
 
 		return bool(js_result)
 
@@ -201,54 +213,91 @@ class MaximoAutomation():
 		return self
 
 
+	def get_sections (self, force_rescan: bool = False):
+		""" Populate the cache ONLY the first time, so that it speeds up on the next calls """
+		if len(self.sections_cache) != 0 and not force_rescan:
+			return self.sections_cache
 
-	def goto_section (self, section_name):
+		# Reset sections cache in case we are forcing a rescan
+		if force_rescan: self.sections_cache = []
+		
+		if self.debug: self.logger.debug("Sections cache is empty. Analyzing DOM...")
+		
+		# Send click to the GoTo button and wait for the sections to expand
+		self.driver.find_element_by_id("titlebar-tb_gotoButton").click()
+		WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, "#menu0_changeapp_startcntr_a")))
+
+		# Loop through every section and save it into the `self.sections_cache` property
+		for section in self.driver.find_elements_by_css_selector("#menu0 li:not(.submenu) > a"): 
+			originalText = section.get_attribute("innerText")
+			
+			# Strip useless strings
+			text = re.sub(r'\(MP\)', '', originalText)
+			text = re.sub(r'\s+', ' ', text).strip().lower()
+
+			# Get HTML_Element data
+			s_id = section.get_attribute("id") 
+			s_href = re.sub(r'javascript:\s+', '', section.get_attribute("href"))
+
+			self.sections_cache[text] = {
+				"id": f"#{s_id}",
+				"href": s_href,
+				"name": originalText
+			}
+
+		if self.debug:
+			self.logger.debug("Sections have been successfully cached. Next calls will be faster")
+
+		return self.sections_cache
+
+
+	def goto_section (self, section_name: str):
 		""" 
 			Goes to the one of the sections you can find under the GoTo Menu in Maximo (Ex. changes, problems...) 
-		"""
-	
-		""" Populate the cache ONLY the first time, so that it speeds up on the next calls """
-		if len(self.sections_cache) == 0:
-			if self.debug: self.logger.debug("Sections cache is empty. Analyzing DOM...")
 			
-			self.driver.find_element_by_id("titlebar-tb_gotoButton").click()
-			WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, "#menu0_changeapp_startcntr_a")))
+			Args:
+				section_name (str): Name of the section to open (Case Insensitive).
 
-
-			for section in self.driver.find_elements_by_css_selector("#menu0 li:not(.submenu) > a"): 
-				originalText = section.get_attribute("innerText")
-				text = re.sub(r'\(MP\)', '', originalText)
-				text = re.sub(r'\s+', ' ', text).strip().lower()
-				s_id = section.get_attribute("id") 
-				s_href = section.get_attribute("href") 
-
-				self.sections_cache[text] = {
-					"id": f"#{s_id}",
-					"href": re.sub(r'javascript:\s+', '', s_href),
-					"name": originalText
-				}
-
-			if self.debug:
-				self.logger.debug("Sections have been successfully cached")
-
+		"""
+		# Get available sections
+		sections = self.get_sections()
+		
+		# Loop through all the available sections and check if there is one that matches with the one provided to this method
 		section_name_parsed = section_name.lower().replace("(MP)", "")
-		if section_name_parsed in self.sections_cache:
-			self.driver.execute_script(self.sections_cache[section_name_parsed]["href"])
-			if self.debug: self.logger.debug(f"Clicked on section '{self.sections_cache[section_name_parsed]['name']}'")
+		if section_name_parsed in sections:
+			self.driver.execute_script(sections[section_name_parsed]["href"])
+			if self.debug: self.logger.debug(f"Clicked on section '{sections[section_name_parsed]['name']}'")
 
 		else:
-			raise Exception(f"Section '{section_name}' does not exist. The following were found:\n" + json.dumps(self.sections_cache, sort_keys=True, indent=4))
+			raise Exception(f"Section '{section_name}' does not exist. The following were found:\n" + json.dumps(sections, sort_keys=True, indent=4))
 
-		self.waitForInputEditable("#quicksearch")
+		self.waitUntilReady()
 
-	def goto_tab(self, tab_name):
+		# Removed for compatibility in case a section doesn't have a quicksearch field
+		# self.waitForInputEditable("#quicksearch")
+
+
+	def goto_tab (self, tab_name: str):
+		"""Goes to a specific tab inside an Incident/Change/Task detail page
+
+		Args:
+			tab_name (str): Name of the tab (Case Sensitive)
+		"""
 		self.driver.find_element_by_link_text(tab_name).click()
 		self.waitUntilReady()
 		self.logger.info(f"Changed tab to '{tab_name}'")
 		
 		
-	def getMaximoInternalVariable(self, variableName):
-		return self.driver.execute_script(f"return {variableName};")
+	def getMaximoInternalVariable(self, variable_name: str):
+		"""Returns the value of a variable inside the Maximo JavaScript code
+
+		Args:
+			variable_name (str): The variable name
+
+		Returns:
+			any: The requested variable value
+		"""
+		return self.driver.execute_script(f"return {variable_name};")
 
 	def getCurrentSection(self):
 		"""
@@ -293,8 +342,13 @@ class MaximoAutomation():
 
 		return filters_found
 
-	def setFilters (self, filter_config):
-		""" Change filters for the change list """
+	def setFilters (self, filter_config: dict):
+		""" 
+			Change filters for the change list
+
+		Args:
+			filter_config (dict): A key-value pair dictionary containing the filters to set in the form of "Filter Name" (key) / "Filter Value" (value)
+		"""
 		self.waitUntilReady()
 		WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "m6a7dfd2f_tbod_ttrow-tr")))
 		
