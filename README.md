@@ -202,10 +202,44 @@ setNamedInput({
 	</tbody>
 </table>
 
-## Other
-### Known Limitations
-- Works only with **Chrome** (for now)
-- The Webdriver **must be** in the **PATH** (cannot pass another path)
+## Known Limitations
+### By **default** it uses **Chrome**
+**To use another browser**, or to set custom flags, you can create **your own webdriver instance** and pass it to _MaximoAutomation_ to use it. For example: 
+```python
+from selenium.webdriver import Firefox
+from selenium.webdriver.firefox.options import Options
 
-### IMPORTANT
-As of now (v. 0.1.1) this package **only** allows to use the **Chromedriver** (which MUST be installed). The possibility to change the browser is in roadmap.
+import maximo_gui_connector as MGC
+
+opts = Options()
+opts.set_headless()
+
+assert opts.headless  # Operating in headless mode
+
+my_webdriver_instance = webdriver.Firefox(options=opts)
+
+maximo = MGC.MaximoAutomation({ "driver": my_webdriver_instance })
+```
+
+This method, however, introduces a **new problem**:
+
+#### The Webdriver **MUST be** in the **PATH** when using custom Webdriver
+To prevent having to download manually the right Webdriver the first time and every time the browser update, you can make use of the [**webdriver-manager**](https://pypi.org/project/webdriver-manager/) package.
+
+What it does is essentially keep a cached version of the Webdriver check every time if the Webdriver version is the same as the installed browser. If not it downloads it.
+
+To use it:
+
+```python
+from selenium import webdriver
+
+# Webdriver Manager
+from webdriver_manager.firefox import GeckoDriverManager
+
+import maximo_gui_connector as MGC
+
+# If not 'installed' it will download an updated version of the driver
+my_webdriver_instance = webdriver.Firefox(executable_path=GeckoDriverManager().install())
+
+maximo = MGC.MaximoAutomation({ "driver": my_webdriver_instance })
+```
