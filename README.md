@@ -1,3 +1,7 @@
+[![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](https://lbesson.mit-license.org/)
+[![GitHub tag](https://img.shields.io/github/tag/LukeSavefrogs/maximo-gui-connector.svg)](https://GitHub.com/LukeSavefrogs/maximo-gui-connector/tags/) 
+[![PyPI version maximo-gui-connector](https://img.shields.io/pypi/v/maximo-gui-connector.svg)](https://pypi.python.org/pypi/maximo-gui-connector/)
+
 # Maximo GUI Connector for Python
 A small package that uses Selenium to automate the most basic operations you could do on IBM Maximo Asset Management
 
