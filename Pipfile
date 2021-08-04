@@ -7,6 +7,8 @@ name = "pypi"
 selenium = "*"
 webdriver-manager = "*"
 requests = "*"
+install = "*"
+wheel = "*"
 
 [dev-packages]
 twine = "*"
