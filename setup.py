@@ -35,7 +35,7 @@ REQUIRED = [
 
 # What packages are optional?
 EXTRAS = {
-    # 'fancy feature': ['django'],
+    'Webdriver auto-update': ['webdriver_manager'],
 }
 
 # The rest you shouldn't have to touch too much :)
