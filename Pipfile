@@ -12,6 +12,7 @@ wheel = "*"
 
 [dev-packages]
 twine = "*"
+wheel = "*"
 
 [requires]
 python_version = "3.9"
