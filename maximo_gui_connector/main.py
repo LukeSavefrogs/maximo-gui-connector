@@ -922,14 +922,14 @@ class RouteWorkflowInterface():
 			MaximoError: If cannot find the button
 		"""
 		if not self.__maximo.driver.find_elements_by_link_text("Change Status/Group/Owner (MP)"):
-			self.__maximo.logger.critical("No 'Change Status/Group/Owner (MP)' button was found")
+			logger.critical("No 'Change Status/Group/Owner (MP)' button was found")
 
 			raise MaximoError("No 'Change Status/Group/Owner (MP)' button was found")
 		# self.__maximo.driver.find_element_by_link_text("Change Status/Group/Owner (MP)").click()
 		self.__maximo.driver.find_element_by_xpath("//span[contains(text(), 'Change Status/Group/Owner (MP)')]/parent::a").click()
 		self.__maximo.waitUntilReady()
 
-		self.__maximo.logger.info(f"Opened 'Change Status' dialog")
+		logger.info(f"Opened 'Change Status' dialog")
 
 		return self
 
@@ -972,7 +972,7 @@ class RouteWorkflowInterface():
 	
 		if self.__maximo.driver.find_elements_by_id("msgbox-dialog_inner"):
 			msg_box_text = self.__maximo.driver.find_element_by_id("mb_msg").get_attribute("innerText").strip()
-			self.__maximo.logger.error(f"MsgBox has appeared: {msg_box_text}")
+			logger.error(f"MsgBox has appeared: {msg_box_text}")
 
 			button_ok = self.__maximo.driver.find_element_by_id("m88dbf6ce-pb")
 			additional_error_text = ""
@@ -987,9 +987,9 @@ class RouteWorkflowInterface():
 				additional_error_text = f"Record have been changed by another user/instance. Your changes have not been saved\n"
 			else:
 				additional_error_text = ""
-				self.__maximo.logger.warning("Error not handled by this script")
+				logger.warning("Error not handled by this script")
 
-			if additional_error_text: self.__maximo.logger.error(additional_error_text)
+			if additional_error_text: logger.error(additional_error_text)
 
 			button_ok.click()
 			self.__maximo.waitUntilReady()
