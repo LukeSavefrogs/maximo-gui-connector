@@ -148,19 +148,19 @@ class MaximoAutomation(object):
 		WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "j_username")))
 
 		# Send data to the Login form
+		logger.debug(f"Sending Username/Password to the login Form (using {username})")
 		self.driver.find_element_by_id("j_username").send_keys(username)
 		self.driver.find_element_by_id("j_password").send_keys(password)
 
-		if self.debug: logger.debug(f"Username/Password were sent to the login Form (using {username})")
-
 		# Click the 'Login' button
+		logger.debug("Clicking on 'Submit' button")
 		self.driver.find_element_by_css_selector("button#loginbutton").click()
-		if self.debug: logger.debug("Clicked on Submit button")
 		
 		# Wait until Maximo has finished logging in
+		LOGIN_TIMEOUT = 30
 		try:
-			if self.debug: logger.debug("Waiting until Maximo has finished logging in...")
-			WebDriverWait(self.driver, 30).until(EC.presence_of_element_located((By.ID, "titlebar_hyperlink_9-lbsignout")))
+			logger.debug(f"Waiting until Maximo has finished logging in ({LOGIN_TIMEOUT} sec. max)...")
+			WebDriverWait(self.driver, LOGIN_TIMEOUT).until(EC.presence_of_element_located((By.ID, "titlebar_hyperlink_9-lbsignout")))
 		except TimeoutException as e:
 			login_dialog_title = self.driver.find_element_by_css_selector("div.dialog[role='main'] > .message")
 
@@ -214,17 +214,20 @@ class MaximoAutomation(object):
 			return waitOn == false && !document.getElementById('m935819a1-longop_message');
 		""")
 
+		# logger.debug(f"Is Maximo ready? {js_result}")
+
 		return bool(js_result)
 
-	def waitUntilReady (self):
+	def waitUntilReady (self, max_timeout: int = 30):
 		""" Stops the execution of the script until Maximo is ready or no 'Long operation' dialog is present """
-		WebDriverWait(self.driver, 30).until(EC.invisibility_of_element((By.ID, "wait")))
+		WebDriverWait(self.driver, 30).until(lambda driver: self.isReady(), "Timeout reached while trying to wait for Maximo to load some resource")
+		# WebDriverWait(self.driver, 30).until(EC.invisibility_of_element((By.ID, "wait")))
 		
-		if self.driver.find_elements_by_id("query_longopwait-dialog_inner_dialogwait"): 
-			if self.debug: logger.debug("Long loading message box detected. Waiting more time...")
-			WebDriverWait(self.driver, 30).until(EC.invisibility_of_element((By.ID, "query_longopwait-dialog_inner_dialogwait")))
+		# if self.driver.find_elements_by_id("query_longopwait-dialog_inner_dialogwait"): 
+		# 	if self.debug: logger.debug("Long loading message box detected. Waiting more time...")
+		# 	WebDriverWait(self.driver, 30).until(EC.invisibility_of_element((By.ID, "query_longopwait-dialog_inner_dialogwait")))
 
-			self.waitUntilReady()
+		# 	self.waitUntilReady()
 
 		return self
 
@@ -305,9 +308,31 @@ class MaximoAutomation(object):
 		Args:
 			tab_name (str): Name of the tab (Case Sensitive)
 		"""
+		self.waitUntilReady()
+		logger.debug(f"Clicking on tab named '{tab_name}'")
 		self.driver.find_element_by_link_text(tab_name).click()
 		self.waitUntilReady()
+		logger.debug("Waiting until tab is active")
+		WebDriverWait(self.driver, 30).until(lambda driver: self.is_tab_active(tab_name), f"Timeout reached while trying to wait for tab named '{tab_name}' to activate")
 		logger.info(f"Changed tab to '{tab_name}'")
+		
+
+
+	def is_tab_active (self, tab_name: str):
+		"""Checks if a specific tab inside an Incident/Change/Task detail page is active
+
+		Args:
+			tab_name (str): Name of the tab (Case Sensitive)
+		"""
+		return self.driver.execute_script("""
+			function isDetailTabActive (tabName){
+				let element = document.querySelector(`#m397b0593-co3_0 ul li a[title='${tabName}']`);
+
+				if(!element) throw new Error(`Tab con titolo '${tabName}' non esistente`);
+				return element.classList.contains("on");
+			}
+			return isDetailTabActive(arguments[0]);
+		""", tab_name)
 		
 		
 	def getMaximoInternalVariable(self, variable_name: str):
@@ -525,7 +550,6 @@ class MaximoAutomation(object):
 			
 					return accum;
 				}, [])
-			
 				return headers;
 			}
 
@@ -842,45 +866,55 @@ class MaximoAutomation(object):
 			raise MaximoError(msg)
 
 
-	def getNamedInput(self, target: str):
+	def getNamedInput(self, target: str, context: selenium.webdriver.remote.webelement.WebElement = None):
 		"""Gets the element of a named input in the current view
 		
+		Args:
+			target (str): The EXACT label text you want to search
+		"""
+		inputs_found = self.driver.execute_script(r"""
+			function isElement(element) {
+				return element instanceof Element || element instanceof HTMLDocument;  
+			}
+			var context = isElement(arguments[1]) ? arguments[1] : document;
+			return Array.from(context.querySelectorAll('label.text.label[for]')).filter(el => el.classList.length == 2 && el.innerText.trim() == arguments[0].trim()).map(label => {
+				let _for_value = label.getAttribute("for");
+				return document.getElementById(_for_value);
+			});
+		""", target, context)
+		
+		if len(inputs_found) == 0:
+			logger.error(f"No inputs are bound to the label named '{target}'")
+			raise Exception("Element not found")
+
+		if len(inputs_found) == 1:
+			return inputs_found[0]
+		
+		raise Exception(f"Found '{len(inputs_found)}' labels. Expected 1.")
+
+		
+	def getNamedLabel(self, target: str, context: selenium.webdriver.remote.webelement.WebElement = None):
+		"""Gets the element of a named input in the current view
 
 		Args:
 			target (str): The EXACT label text you want to search
 		"""
-		for label in self.driver.find_elements_by_css_selector("label.text.label"):
-			if len(label.get_attribute("class").split()) != 2 or not label.get_attribute("for").strip(): 
-				continue
-			
-			label_text = label.get_attribute("innerText").strip()
-			if label_text == target.strip():
-				input_id = label.get_attribute("for")
+		labels_found = self.driver.execute_script("""
+			function isElement(element) {
+				return element instanceof Element || element instanceof HTMLDocument;  
+			}
+			var context = isElement(arguments[1]) ? arguments[1] : document;
+			return Array.from(context.querySelectorAll('label.text.label[for], .anchor.text.label[for]')).filter(el => el.classList.length == 2 && el.innerText.trim() == arguments[0].trim())
+		""", target, context)
 
-				if not self.driver.find_elements_by_id(input_id):
-					logger.error(f"No inputs are bound to the label named '{label_text}'")
-					
-					continue
-				
-				return self.driver.find_element_by_id(input_id)
-		else:
+		if len(labels_found) == 0:
 			raise Exception("Element not found")
+
+		if len(labels_found) == 1:
+			return labels_found[0]
 		
-	def getNamedLabel(self, target: str):
-		"""Gets the element of a named input in the current view
+		raise Exception(f"Found '{len(labels_found)}' labels. Expected 1.")
 
-		Args:
-			target (str): The EXACT label text you want to search
-		"""
-		for label in self.driver.find_elements_by_css_selector(".anchor.text.label"):
-			""" if len(label.get_attribute("class").split()) != 2 or not label.get_attribute("for").strip(): 
-				continue """
-			
-			label_text = label.get_attribute("innerText").strip()
-			if label_text == target.strip():				
-				return label
-		else:
-			raise Exception("Element not found")
 
 	def handleIfComingFromDetail(self):		
 		foregroundDialog = self.getForegroundDialog()
@@ -928,6 +962,9 @@ class RouteWorkflowInterface():
 		# self.__maximo.driver.find_element_by_link_text("Change Status/Group/Owner (MP)").click()
 		self.__maximo.driver.find_element_by_xpath("//span[contains(text(), 'Change Status/Group/Owner (MP)')]/parent::a").click()
 		self.__maximo.waitUntilReady()
+
+		# Wait until button "Route WorkFlow" shows up
+		WebDriverWait(self.__maximo.driver, 20).until(EC.visibility_of_element_located((By.ID, "m24bf0ed1-pb")))
 
 		logger.info(f"Opened 'Change Status' dialog")
 

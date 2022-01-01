@@ -85,6 +85,15 @@ This section is still work in progress, so some properties/methods could miss.
 								Defaults to <code>False</code>
 							</td>
 						</tr>
+						<tr>
+							<td><code>url</code></td>
+							<td>
+								The URL of the Login page (where to input username and password)
+								<br>
+								<br>
+								Defaults to <a href="https://ism.italycsc.com/UI/maximo/webclient/login/login.jsp">ism.italycsc.com</a>'s Maximo login page
+							</td>
+						</tr>
 					</tbody>
 				</table>
 				Example:
