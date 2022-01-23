@@ -63,7 +63,7 @@ class MaximoAutomation(object):
 
 	sections_cache = {}
 	
-	def __init__(self, config: dict = {}, login_url: str = "https://ism.italycsc.com/UI/maximo/webclient/login/login.jsp"):
+	def __init__(self, config: dict = {}, window_size: tuple = (), login_url: str = "https://ism.italycsc.com/UI/maximo/webclient/login/login.jsp"):
 		"""Establish a connection to Maximo
 
 		Args:
@@ -94,7 +94,7 @@ class MaximoAutomation(object):
 			logger.debug("Using default WebDriver instance")
 			chrome_flags = chrome_flags + [
 				"--disable-extensions",
-				"start-maximized",
+				"--start-maximized",
 				"--disable-gpu",
 				"--ignore-certificate-errors",
 				"--ignore-ssl-errors",
@@ -122,7 +122,10 @@ class MaximoAutomation(object):
 			logger.debug("Using custom WebDriver instance")
 
 			self.driver = config["driver"]
-			
+		
+		if window_size:
+			self.driver.set_window_size(*window_size)
+
 		self.driver.get(login_url)
 
 
