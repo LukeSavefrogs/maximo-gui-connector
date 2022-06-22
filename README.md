@@ -2,6 +2,11 @@
 [![GitHub tag](https://img.shields.io/github/tag/LukeSavefrogs/maximo-gui-connector.svg)](https://GitHub.com/LukeSavefrogs/maximo-gui-connector/tags/) 
 [![PyPI version maximo-gui-connector](https://img.shields.io/pypi/v/maximo-gui-connector.svg)](https://pypi.python.org/pypi/maximo-gui-connector/)
 
+> # Archive warning
+> Since i have changed workplace, where we don't use Maximo Asset Management anymore, i don't have any interest in mantaining or keeping this project alive.
+>
+> Have a good day 😄
+
 # Maximo GUI Connector for Python
 A small package that uses Selenium to automate the most basic operations you could do on IBM Maximo Asset Management
 
